@@ -24,8 +24,15 @@ class MeetingController extends Controller
 
     public function create(): View
     {
+        $missing = $this->realtimeKit->missingConfiguration();
+        if (! empty($missing)) {
+            Log::warning('MeetingController@create: RealtimeKit configuration missing in .env', [
+                'missing_keys' => $missing,
+            ]);
+        }
+
         return view('meetings.create', [
-            'missingConfig' => $this->realtimeKit->missingConfiguration(),
+            'missingConfig' => $missing,
         ]);
     }
 
@@ -39,9 +46,23 @@ class MeetingController extends Controller
         $title = trim($validated['title']);
         $hostName = trim($validated['host_name']);
 
+        Log::info('MeetingController@store: Creating meeting request received', [
+            'title' => $title,
+            'host_name' => $hostName,
+            'ip' => $request->ip(),
+        ]);
+
         try {
             $cloudflareMeetingId = $this->realtimeKit->createMeeting($title);
         } catch (RealtimeKitException $e) {
+            Log::error('MeetingController@store: RealtimeKit meeting creation failed', [
+                'title' => $title,
+                'host_name' => $hostName,
+                'error' => $e->getMessage(),
+                'reason' => $e->reason,
+                'status_code' => $e->getCode(),
+            ]);
+
             return back()->withInput()->with('error', $e->getMessage());
         }
 
@@ -57,7 +78,18 @@ class MeetingController extends Controller
             ]);
             $meeting->setHostSecret($hostSecret);
             $meeting->save();
+
+            Log::info('MeetingController@store: Meeting created and saved successfully', [
+                'meeting_id' => $meeting->id,
+                'meeting_code' => $meeting->meeting_code,
+                'realtimekit_meeting_id' => $cloudflareMeetingId,
+            ]);
         } catch (Throwable $e) {
+            Log::error('MeetingController@store: Failed to save meeting in database', [
+                'realtimekit_meeting_id' => $cloudflareMeetingId,
+                'error' => $e->getMessage(),
+            ]);
+
             $this->handleOrphanedCloudflareMeeting($cloudflareMeetingId, $e);
 
             return back()->withInput()->with('error', 'The meeting could not be saved. Please try again.');
@@ -119,6 +151,10 @@ class MeetingController extends Controller
     public function disable(Request $request, Meeting $meeting): JsonResponse|RedirectResponse
     {
         if (! $meeting->isHostSession()) {
+            Log::warning('MeetingController@disable: Unauthorized disable attempt', [
+                'meeting_code' => $meeting->meeting_code,
+                'ip' => $request->ip(),
+            ]);
             return $this->respond($request, 403, 'Only the host who created this meeting can disable it.');
         }
 
@@ -128,7 +164,16 @@ class MeetingController extends Controller
 
         try {
             $this->realtimeKit->disableMeeting($meeting->realtimekit_meeting_id);
+            Log::info('MeetingController@disable: Meeting disabled via RealtimeKit', [
+                'meeting_code' => $meeting->meeting_code,
+                'realtimekit_meeting_id' => $meeting->realtimekit_meeting_id,
+            ]);
         } catch (RealtimeKitException $e) {
+            Log::error('MeetingController@disable: RealtimeKitException while disabling meeting', [
+                'meeting_code' => $meeting->meeting_code,
+                'error' => $e->getMessage(),
+                'reason' => $e->reason,
+            ]);
             // Cloudflare reporting it is already inactive is an acceptable end state.
             if ($e->reason !== RealtimeKitException::MEETING_INACTIVE) {
                 return $this->respond($request, 502, 'The meeting could not be disabled: '.$e->getMessage());
@@ -138,6 +183,10 @@ class MeetingController extends Controller
         // Only after Cloudflare confirmed the change.
         $meeting->status = Meeting::STATUS_DISABLED;
         $meeting->save();
+
+        Log::info('MeetingController@disable: Meeting status updated to disabled in database', [
+            'meeting_code' => $meeting->meeting_code,
+        ]);
 
         return $this->respond($request, 200, 'The meeting has been disabled. No one can join it anymore.', ['status' => $meeting->status]);
     }

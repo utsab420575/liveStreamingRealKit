@@ -7,6 +7,7 @@ use App\Models\Meeting;
 use App\Services\RealtimeKitService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Log;
 
 class RealtimeKitController extends Controller
 {
@@ -27,6 +28,10 @@ class RealtimeKitController extends Controller
         // Always re-check status from the database before every token request.
         $meeting->refresh();
         if (! $meeting->isActive()) {
+            Log::warning('RealtimeKitController@token: Cannot issue token, meeting is disabled', [
+                'meeting_code' => $meeting->meeting_code,
+            ]);
+
             return response()->json([
                 'message' => 'This meeting has been disabled by the host and can no longer be joined.',
                 'reason' => 'disabled',
@@ -36,10 +41,27 @@ class RealtimeKitController extends Controller
         $name = trim($validated['name']);
         $isHost = $meeting->isHostSession();
 
+        Log::info('RealtimeKitController@token: Requesting participant token', [
+            'meeting_code' => $meeting->meeting_code,
+            'realtimekit_meeting_id' => $meeting->realtimekit_meeting_id,
+            'name' => $name,
+            'is_host' => $isHost,
+        ]);
+
         try {
             // Meeting ID always comes from the DB; preset always from server config.
             $participant = $this->realtimeKit->addParticipant($meeting->realtimekit_meeting_id, $name, $isHost);
         } catch (RealtimeKitException $e) {
+            Log::error('RealtimeKitController@token: RealtimeKitException while adding participant', [
+                'meeting_code' => $meeting->meeting_code,
+                'realtimekit_meeting_id' => $meeting->realtimekit_meeting_id,
+                'name' => $name,
+                'is_host' => $isHost,
+                'error' => $e->getMessage(),
+                'reason' => $e->reason,
+                'status_code' => $e->getCode(),
+            ]);
+
             $status = match ($e->reason) {
                 RealtimeKitException::NOT_CONFIGURED => 503,
                 RealtimeKitException::LIMIT => 429,
@@ -51,6 +73,12 @@ class RealtimeKitController extends Controller
         }
 
         $request->session()->put('display_name', $name);
+
+        Log::info('RealtimeKitController@token: Token issued successfully', [
+            'meeting_code' => $meeting->meeting_code,
+            'participant_id' => $participant['participant_id'],
+            'is_host' => $isHost,
+        ]);
 
         return response()
             ->json([

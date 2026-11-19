@@ -100,6 +100,7 @@ if (root) {
         const old = document.getElementById('rtk-meeting');
         const el = document.createElement('rtk-meeting');
         el.id = 'rtk-meeting';
+        el.setAttribute('mode', 'fill');
         el.setAttribute('show-setup-screen', 'true');
         el.className = old.className;
         old.replaceWith(el);
@@ -107,6 +108,7 @@ if (root) {
     };
 
     async function requestToken(name) {
+        console.log('[RealtimeKit] Requesting participant token from server...', { name, tokenUrl });
         let response;
         try {
             response = await fetch(tokenUrl, {
@@ -121,7 +123,8 @@ if (root) {
                 },
                 body: JSON.stringify({ name }),
             });
-        } catch {
+        } catch (netErr) {
+            console.error('[RealtimeKit] Network failure contacting token endpoint:', netErr);
             throw new Error('Network error: could not reach the server. Check your connection and try again.');
         }
 
@@ -133,6 +136,7 @@ if (root) {
         }
 
         if (!response.ok) {
+            console.error(`[RealtimeKit] Token request failed with HTTP ${response.status}:`, body);
             if (response.status === 410) {
                 disabled = true;
             }
@@ -147,17 +151,22 @@ if (root) {
         }
 
         if (typeof body.token !== 'string' || body.token === '') {
+            console.error('[RealtimeKit] Token endpoint response missing valid token string:', body);
             throw new Error('The server returned an invalid meeting token.');
         }
+
+        console.log('[RealtimeKit] Participant token received successfully.');
         return body.token;
     }
 
     function attachMeetingListeners(m) {
         m.self.on('roomJoined', () => {
+            console.log('[RealtimeKit] Event: roomJoined — Connected to meeting room.');
             els.loading?.classList.add('hidden');
         });
 
         m.self.on('roomLeft', ({ state }) => {
+            console.warn('[RealtimeKit] Event: roomLeft with state:', state);
             meeting = null;
             joining = false;
             switch (state) {
@@ -193,6 +202,7 @@ if (root) {
             NO_DEVICES_AVAILABLE: 'was not found on this device.',
         };
         m.self.on('mediaPermissionError', ({ kind, message }) => {
+            console.error('[RealtimeKit] Event: mediaPermissionError:', { kind, message });
             const device = kind === 'audio' ? 'Microphone' : kind === 'video' ? 'Camera' : 'Screen share';
             showMediaBanner(`${device} ${permissionMessages[message] ?? 'is unavailable.'}`);
         });
@@ -226,10 +236,13 @@ if (root) {
         setJoinError(null);
         setJoinBusy(true);
 
+        console.log('[RealtimeKit] Starting join flow for:', name);
+
         let authToken;
         try {
             authToken = await requestToken(name);
         } catch (error) {
+            console.error('[RealtimeKit] Join aborted during token request:', error.message);
             joining = false;
             setJoinBusy(false);
             setJoinError(error.message);
@@ -241,9 +254,11 @@ if (root) {
         els.loading?.classList.remove('hidden');
 
         try {
+            console.log('[RealtimeKit] Waiting for <rtk-meeting> custom element definition...');
             await customElements.whenDefined('rtk-meeting');
             const el = freshMeetingElement();
 
+            console.log('[RealtimeKit] Calling RealtimeKitClient.init()...');
             const m = await RealtimeKitClient.init({ authToken });
             authToken = null; // drop our reference; the SDK holds what it needs
 
@@ -252,7 +267,9 @@ if (root) {
             el.meeting = m;
             // The setup screen is now visible; hide our spinner.
             els.loading?.classList.add('hidden');
+            console.log('[RealtimeKit] RealtimeKitClient initialized and bound to <rtk-meeting>');
         } catch (error) {
+            console.error('[RealtimeKit] RealtimeKitClient.init() failed:', error);
             meeting = null;
             joining = false;
             setJoinBusy(false);

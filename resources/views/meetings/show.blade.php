@@ -140,7 +140,11 @@
                 <span class="h-10 w-10 animate-spin rounded-full border-4 border-slate-700 border-t-indigo-500"></span>
                 <p class="text-sm">Connecting to the meeting…</p>
             </div>
-            <rtk-meeting id="rtk-meeting" show-setup-screen="true" class="block h-full w-full"></rtk-meeting>
+            {{-- mode="fill": fill this container instead of the UI Kit's default
+                 position:fixed full-window mode. Do not add a `display` class
+                 (e.g. `block`) here: it overrides the kit's flex layout and
+                 collapses the video grid. --}}
+            <rtk-meeting id="rtk-meeting" mode="fill" show-setup-screen="true" class="h-full w-full"></rtk-meeting>
         </div>
     </section>
 
